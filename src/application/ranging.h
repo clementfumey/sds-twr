@@ -2,6 +2,8 @@
 #define MAX_FRAME_SIZE         127
 #define POLL_SLEEP_DELAY					1 //ms
 #define WAIT_SLEEP_DELAY					5 //ms
+#define FIXED_REPLY_DELAY       			1
+
 
 typedef struct
 {
@@ -45,6 +47,7 @@ typedef struct
 	uint32 delayedReplyTime32;
 
     uint32 rxTimeouts ;
+    uint32 txTimeouts ;
 	uint8	stoptimer;				// stop/disable an active timer
     uint8	timer_en;		// enable/start a timer
     uint32	timer;			// e.g. this timer is used to timeout Tag when in deep sleep so it can send the next poll message
