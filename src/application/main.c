@@ -4,14 +4,15 @@
 #include "port.h"
 #include "deca_types.h"
 #include "deca_spi.h"
-#includes "events.h"
-#includes "states.h"
-#includes "actions.h"
+#include "deca_device_api.h"
+#include "ranging.h"
 
-int instance_anchaddr = 0;
-int instance_mode = ANCHOR;
-static data_t data ;
+static data_t data;
+enum events new_event;
 
+
+
+	
 void process_dwRSTn_irq(void)
 {
     instance_notify_DW1000_inIDLE(1);
@@ -69,15 +70,15 @@ void txcallback(const dwt_callback_data_t *txd)
 		//NOTE - we can only get TX good (done) while here
 
 		dwt_readtxtimestamp(txTimeStamp) ;
-		new_dwt_event.timeStamp32l = (uint32)txTimeStamp[0] + ((uint32)txTimeStamp[1] << 8) + ((uint32)txTimeStamp[2] << 16) + ((uint32)txTimeStamp[3] << 24);
-		new_dwt_event.timeStamp = txTimeStamp[4];
-	    new_dwt_event.timeStamp <<= 32;
-		new_dwt_event.timeStamp += new_dwt_event.timeStamp32l;
-		new_dwt_event.timeStamp32h = ((uint32)txTimeStamp[4] << 24) + (new_dwt_event.timeStamp32l >> 8);
-		new_dwt_event.rxLength = 0;
-		new_dwt_event.type2 = new_dwt_event.type = SIG_TX_DONE ;
+		new_dw_event.timeStamp32l = (uint32)txTimeStamp[0] + ((uint32)txTimeStamp[1] << 8) + ((uint32)txTimeStamp[2] << 16) + ((uint32)txTimeStamp[3] << 24);
+		new_dw_event.timeStamp = txTimeStamp[4];
+	    new_dw_event.timeStamp <<= 32;
+		new_dw_event.timeStamp += new_dw_event.timeStamp32l;
+		new_dw_event.timeStamp32h = ((uint32)txTimeStamp[4] << 24) + (new_dw_event.timeStamp32l >> 8);
+		new_dw_event.rxLength = 0;
+		new_dw_event.type2 = new_dw_event.type = SIG_TX_DONE ;
 
-		putevent(new_dwt_event);
+		putevent(new_dw_event);
 
 	}
 	else
@@ -183,13 +184,6 @@ void rxcallback(const dwt_callback_data_t *rxd)
 		{
 	    	putevent(new_dwt_event);
 		}
-		else if (rxd_event == SIG_RX_ACK)
-		{
-
-		}
-		else if (rxd_event == SIG_RX_BLINK)
-		{
-		}
 
 		if (rxd_event == OTHERS) //need to re-enable the rx
 		{
@@ -209,17 +203,19 @@ void rxcallback(const dwt_callback_data_t *rxd)
 	}
 	else //assume other events are errors
 	{
+		new_dwt_event.type2 = new_dwt_event.type = OTHERS;
+		new_dwt_event.rxLength = 0;
+		new_dwt_event.timeStamp = 0;
+		new_dwt_event.timeStamp32l = 0;
+		new_dwt_event.timeStamp32h = 0;
 
+		putevent(new_dwt_event);
 	}
 }
 
 int main(void)
 {
     uint8 dataseq[40];
-	STATES current_state;
-	STATES previous_state;
-	EVENTS new_event;
-	
 
     led_off(LED_ALL); //turn off all the LEDs
 
@@ -237,36 +233,25 @@ int main(void)
     
     led_on(LED_ALL); //turn off all the LEDs
     Sleep(10);
-	led_off(LED_ALL);
-	
-	if(port_IS_TAG_pressed() == 0){
-		instance_mode = TAG;
-        led_on(LED_PC7);
-    }else{
-		led_on(LED_PC6);
-    }
-	
-
-	
-	
+	led_off(LED_ALL);	
 
 	
 	//init DW1000
 	initDW();
 	//SET INIT STATE
-	current_state = INIT_STATE;
+	data.current_state = INIT_STATE;
 	//Launch Timer
 	data.timer = portGetTickCount() + data.tagSleepTime_ms; //set timeout time
 	data.timer_en = 1; //start timer
 	data.stoptimer = 0 ; //clear the flag - timer can run if instancetimer_en set (set above)
 		
 	while (1){
-		new_event = get_new_event (); /* get the next event to process */
+		new_event = get_new_event (&data); /* get the next event to process */
 		
 		if (((new_event > 0) && (new_event < MAX_EVENTS))
-		&& ((current_state >= 0) && (current_state < MAX_STATES))) {
+		&& ((data.current_state >= 0) && (data.current_state < MAX_STATES))) {
 
-			state_table [current_state][new_event] (); /* call the action procedure */
+			state_table [data.current_state][new_event] (&data); /* call the action procedure */
 
 		} else {
 
@@ -281,12 +266,9 @@ int main(void)
 				event_data_t dw_event;
 				data.timer_en = 0;
 				dw_event.rxLength = 0;
-				if(current_state == INIT_STATE || current_state == WAIT_STATE || current_state == TX_POLL_STATE){
+				if(data.current_state == INIT_STATE || data.current_state == TX_POLL_STATE){
 					dw_event.type = TIMER_CALLBACK;
 					dw_event.type2 = TIMER_CALLBACK;
-				}else if(current_state == RX_RESP_WAIT){
-					dw_event.type = SIG_RX_TIMEOUT;
-					dw_event.type2 = SIG_RX_TIMEOUT;
 				}
 				putevent(dw_event);
 			}

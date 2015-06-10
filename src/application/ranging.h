@@ -1,9 +1,13 @@
+#include "deca_types.h"
 
 #define MAX_FRAME_SIZE         127
 #define POLL_SLEEP_DELAY					1 //ms
 #define WAIT_SLEEP_DELAY					5 //ms
 #define FIXED_REPLY_DELAY       			1
+#define MAX_EVENT_NUMBER (10)
 
+enum states { INIT_STATE, TX_POLL_STATE, RX_RESP_WAIT, TX_FINAL_STATE, MAX_STATES };
+enum events { NO_EVENT, SIG_RX_OKAY, SIG_TX_DONE, SIG_RX_TIMEOUT, OTHERS, TIMER_CALLBACK, MAX_EVENTS };
 
 typedef struct
 {
@@ -16,14 +20,31 @@ typedef struct
     uint8 fcs[2] ;                              	//  125-126  we allow space for the CRC as it is logically part of the message. However ScenSor TX calculates and adds these bytes.
 } srd_msg ;
 
+typedef struct
+{
+	uint8  type;			// event type
+	uint8  type2;			// holds the event type - does not clear (not used to show if event has been processed)
+	//uint8  broadcastmsg;	// specifies if the rx message is broadcast message
+	uint16 rxLength ;
+
+	uint64 timeStamp ;		// last timestamp (Tx or Rx)
+
+	uint32 timeStamp32l ;		   // last tx/rx timestamp - low 32 bits
+	uint32 timeStamp32h ;		   // last tx/rx timestamp - high 32 bits
+
+	union {
+			//holds received frame (after a good RX frame event)
+			uint8   frame[127]; //STANDARD_FRAME_SIZE
+    		srd_msg rxmsg ;
+	}msgu;
+
+	//uint32 eventtime ;
+	//uint32 eventtimeclr ;
+	//uint8 gotit;
+}event_data_t ;
 
 typedef struct
 {
-    INST_MODE mode;				//instance mode (tag or anchor)
-
-	//configuration structures
-	dwt_config_t    configData ;	//DW1000 channel configuration
-	dwt_txconfig_t  configTX ;		//DW1000 TX power configuration
 	uint16			txantennaDelay ; //DW1000 TX antenna delay
 
 	//timeouts and delays
@@ -46,7 +67,6 @@ typedef struct
 	uint64 delayedReplyTime;		// delayed reply time of ranging-init/response/final message
 	uint32 delayedReplyTime32;
 
-    uint32 rxTimeouts ;
     uint32 txTimeouts ;
 	uint8	stoptimer;				// stop/disable an active timer
     uint8	timer_en;		// enable/start a timer
@@ -101,4 +121,23 @@ typedef struct
 	uint8 dweventPeek;
 
 	int dwIDLE;
+	
+	enum states current_state;
+	enum states previous_state;
+
 } data_t ;
+
+void send_poll (data_t *data);
+void sleep_mode (data_t *data);
+void rx_mode (data_t *data);
+void send_final (data_t *data);
+void ignore_event (data_t *data);
+void rx_fail(data_t *data);
+enum events get_new_event (data_t *data);
+
+void (*const state_table [MAX_STATES][MAX_EVENTS]) (data_t *data) = {
+    { ignore_event, ignore_event, ignore_event, ignore_event, ignore_event, send_poll }, /* procedures for state INIT_STATE */
+    { ignore_event, ignore_event, rx_mode, ignore_event, ignore_event, send_poll }, /* procedures for state TX_POLL_STATE */
+    { ignore_event, send_final, ignore_event, rx_fail, rx_fail, ignore_event }, /* procedures for state RX_RESP_WAIT */
+    { ignore_event, ignore_event, sleep_mode, ignore_event, ignore_event, sleep_mode }  /* procedures for state TX_FINAL_STATE */
+};
