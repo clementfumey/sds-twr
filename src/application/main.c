@@ -43,7 +43,7 @@ void initLCD(void)
     writetoLCD( 1, 0,  &command);
 }
 
-void initDW(void)
+void initDW(data_t *data)
 {
 	int result;
 	
@@ -55,7 +55,54 @@ void initDW(void)
     {
         return (-1) ;   // device initialise has failed
     }
-    dwt_geteui(data.eui64);
+    dwt_setautorxreenable(1); //Enable auto rx re-enable
+    dwt_setdblrxbuffmode(0); //Do not used double buffer
+    dwt_enableframefilter(DWT_FF_DATA_EN); //Data frames allowed
+    
+	int polRespDly = FIXED_RP_REPLY_DELAY_US;
+
+	if(data->configData.txPreambLength == DWT_PLEN_512)
+	{
+		polRespDly += 400;
+	}
+
+	//timeouts and delays
+	data-> tagSleepTime_ms = 1; //in milliseconds
+
+	data->fwtoTime_sy = instanceframeduration(HEADER_LENGTH + MESSAGE_DATA_FINAL + CRC_LENGTH);	//this is final message duration (longest out of ranging messages)
+	// xx_sy the units are 1.0256 us
+	data->fixedReplyDelay_sy = (polRespDly - data->fwtoTime_sy);  //units are ~us - wait for wait4respTIM before RX on (delay RX)    // this is the delay used after sending a poll or response and turning on the receiver to receive response or final
+    data->fixedFastReplyDelay32h =(uint32) ((convertmicrosectodevicetimeu32 (polRespDly) & 0x00FFFFFFFE00) >> 8); //this it the is the delay used before sending response or final message
+
+    data->txTimeouts = 1;
+    data->rxTimeouts = 5000;
+
+	//Tag function address/message configuration
+
+
+	dwt_geteui(data->eui64);				// devices EUI 64-bit address
+	data->tagShortAdd = data->eui64[0] + (data->eui64[1] << 8);		    // Tag's short address (16-bit)
+    data->frame_sn = 0;				// modulo 256 frame sequence number - it is incremented for each new frame transmittion
+	data->panid = 0xdeca;					// panid used in the frames
+	dwt_setaddress16(data->tagShortAdd);
+	//set source address into the message structure
+	memcpy(&data->msg.sourceAddr[0], data->tagShortAdd, 2);
+	dwt_setpanid(data->panid);
+    
+	data->txmsgcount = 0;
+	data->rxmsgcount = 0;
+	data->lateTX = 0;
+	data->lateRX = 0;
+	
+    data->dweventIdxOut = 0;
+    data->dweventIdxIn = 0;
+	data->dweventPeek = 0;
+	
+	
+uint16 addr = data->eui64[0] + (data->eui64[1] << 8);
+dwt_setaddress16(addr);
+//set source address into the message structure
+memcpy(&data->msg.sourceAddr[0], data->eui64, 2);
 }
 
 void txcallback(const dwt_callback_data_t *txd)
@@ -235,9 +282,10 @@ int main(void)
     Sleep(10);
 	led_off(LED_ALL);	
 
-	
+	//config DW1000
+	config_data(&data);
 	//init DW1000
-	initDW();
+	initDW(&data);
 	//SET INIT STATE
 	data.current_state = INIT_STATE;
 	//Launch Timer

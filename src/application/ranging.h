@@ -1,4 +1,6 @@
 #include "deca_types.h"
+#include "deca_device_api.h"
+#include "port.h"
 
 #define MAX_FRAME_SIZE         127
 #define POLL_SLEEP_DELAY					1 //ms
@@ -6,16 +8,33 @@
 #define FIXED_REPLY_DELAY       			1
 #define MAX_EVENT_NUMBER (10)
 
+//Length
+#define HEADER_LENGTH 8 //seqNum + panID + destddr + sourceAddr + fctCode= 1+2+2+2+1
+#define MESSAGE_DATA_LATE 1
+#define MESSAGE_DATA_POLL 0
+#define MESSAGE_DATA_RESP 0
+#define MESSAGE_DATA_FINAL 8//Two timestamp
+#define CRC_LENGTH 2
+
+#define SDSTWR_FCT_CODE_POLL 0x01
+#define SDSTWR_FCT_CODE_RESP 0x02
+#define SDSTWR_FCT_CODE_FINAL 0x03
+
+//NOTE: only one transmission is allowed in 1ms when using smart tx power setting (applies for 6.81Mb data rate)
+//blink tx time ~ 180us with 128 preamble length
+
+#define FIXED_RP_REPLY_DELAY_US         (320)  //us //response delay time during ranging (Poll RX to Resp TX, Resp RX to Final TX)
+
 enum states { INIT_STATE, TX_POLL_STATE, RX_RESP_WAIT, TX_FINAL_STATE, MAX_STATES };
 enum events { NO_EVENT, SIG_RX_OKAY, SIG_TX_DONE, SIG_RX_TIMEOUT, OTHERS, TIMER_CALLBACK, MAX_EVENTS };
 
 typedef struct
 {
-    uint8 frameCtrl[2];                         	//  frame control bytes 00-01
     uint8 seqNum;                               	//  sequence_number 02
     uint8 panID[2];                             	//  PAN ID 03-04
     uint8 destAddr[2];             					//  05-06
     uint8 sourceAddr[2];           					//  07-08
+	uint8 fctCode;                               	//  sequence_number 02
     uint8 messageData[116] ; 						//  09-124 (application data and any user payload)
     uint8 fcs[2] ;                              	//  125-126  we allow space for the CRC as it is logically part of the message. However ScenSor TX calculates and adds these bytes.
 } srd_msg ;
@@ -45,6 +64,9 @@ typedef struct
 
 typedef struct
 {
+	//configuration structures
+	dwt_config_t    configData ;	//DW1000 channel configuration
+	dwt_txconfig_t  configTX ;		//DW1000 TX power configuration
 	uint16			txantennaDelay ; //DW1000 TX antenna delay
 
 	//timeouts and delays
@@ -56,18 +78,15 @@ typedef struct
 
 	// xx_sy the units are 1.0256 us
 	int fixedReplyDelay_sy ;    // this is the delay used after sending a poll or response and turning on the receiver to receive response or final
-	int rnginitW4Rdelay_sy ;	// this is the delay used after sending a blink and turning on the receiver to receive the ranging init message
 
 	int fwtoTime_sy ;	//this is final message duration (longest out of ranging messages)
-	int fwtoTimeB_sy ;	//this is the ranging init message duration
-
-    uint32 fixedRngInitReplyDelay32h ;	//this is the delay after receiving a blink before responding with ranging init message
     uint32 fixedFastReplyDelay32h ; //this it the is the delay used before sending response or final message
 
 	uint64 delayedReplyTime;		// delayed reply time of ranging-init/response/final message
 	uint32 delayedReplyTime32;
 
     uint32 txTimeouts ;
+    uint32 rxTimeouts ;
 	uint8	stoptimer;				// stop/disable an active timer
     uint8	timer_en;		// enable/start a timer
     uint32	timer;			// e.g. this timer is used to timeout Tag when in deep sleep so it can send the next poll message
@@ -79,6 +98,7 @@ typedef struct
 	//Tag function address/message configuration
 	uint8   eui64[8];				// devices EUI 64-bit address
 	uint16  tagShortAdd ;		    // Tag's short address (16-bit) used when USING_64BIT_ADDR == 0
+	uint16  anchShortAdd ;
 	uint16  psduLength ;			// used for storing the frame length
     uint8   frame_sn;				// modulo 256 frame sequence number - it is incremented for each new frame transmittion
 	uint16  panid ;					// panid used in the frames
@@ -141,3 +161,15 @@ void (*const state_table [MAX_STATES][MAX_EVENTS]) (data_t *data) = {
     { ignore_event, send_final, ignore_event, rx_fail, rx_fail, ignore_event }, /* procedures for state RX_RESP_WAIT */
     { ignore_event, ignore_event, sleep_mode, ignore_event, ignore_event, sleep_mode }  /* procedures for state TX_FINAL_STATE */
 };
+typedef struct {
+                uint8 PGdelay;
+
+                //TX POWER
+                //31:24     BOOST_0.125ms_PWR
+                //23:16     BOOST_0.25ms_PWR-TX_SHR_PWR
+                //15:8      BOOST_0.5ms_PWR-TX_PHR_PWR
+                //7:0       DEFAULT_PWR-TX_DATA_PWR
+                uint32 txPwr[2]; //
+}tx_struct;
+static const uint16 rfDelays[2];
+static const tx_struct txSpectrumConfig[8];
